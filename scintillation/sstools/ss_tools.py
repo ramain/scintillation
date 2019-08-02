@@ -93,8 +93,8 @@ def clean_foldspec(f, plots=True):
     
     # Create boolean mask from scale factors
     mask = np.zeros_like(scl_inv)
-    mask[scl_inv<0.5] = 0
-    mask[scl_inv>0.5] = 1
+    mask[scl_inv<0.2] = 0
+    mask[scl_inv>0.2] = 1
     
     # Apply scales, sum time, freq, to find profile and off-pulse region
     f_scl = (f - offs[...,np.newaxis]) * scl_inv[...,np.newaxis]
@@ -108,7 +108,7 @@ def clean_foldspec(f, plots=True):
     scl_inv[np.isinf(scl_inv)] = 0
     
     f_scl = (f - offs[...,np.newaxis]) * scl_inv[...,np.newaxis]
-    #f_scl *= mask[...,np.newaxis]
+    f_scl *= mask[...,np.newaxis]
     
     if plots:
         plt.figure(figsize=(14,4))
@@ -128,8 +128,68 @@ def clean_foldspec(f, plots=True):
 
     return f_scl, mask
 
+def create_dynspec(foldspec, profsig=5.):
+    """
+    Create dynamic spectrum from folded data cube
+    
+    Uses average profile as a weight, sums over phase
 
-def create_SS(dynspec, freq, mask):
+    Parameters 
+    ----------                                                                                                         
+    foldspec: [time, frequency, phase] array
+    profsig: S/N value, mask all profile below this
+    """
+    
+    # Create profile by summing over time, frequency, normalize peak to 1
+    template = foldspec.mean(0).mean(0)
+    template /= np.max(template)
+
+    # Noise from bottom 50% of profile
+    tnoise = np.std(template[template<np.median(template)])
+    template[template < tnoise*profsig] = 0
+    profplot2 = np.concatenate((template, template), axis=0)
+
+    # Multiply the profile by the template, sum over phase
+    dynspec = (foldspec*template[np.newaxis,np.newaxis,:]).mean(-1)
+    dynspec /= np.std(dynspec)
+
+    return dynspec
+
+def create_SS(dynspec, freq, pad=1, taper=1):
+    """
+    Create secondary spectrum from dynamic spectrum,
+    using slow FT for frequency correction
+    
+    Parameters
+    ----------
+    dynspec: ndarray of floats [time, freq]
+    freq: array of floats
+    Frequencies of each channel in MHz    
+    mask: ndarray of floats [time, freq]
+    pad: Boolean - padding factor of the dynspec in time
+    taper: Apply a Tukey Window to the dynspec
+    """
+
+    if taper:
+        import scipy.signal
+        t_window = scipy.signal.windows.tukey(dynspec.shape[0], alpha=0.2, sym=True)
+        dynspec = dynspec*t_window[:,np.newaxis]
+        f_window = scipy.signal.windows.tukey(dynspec.shape[1], alpha=0.2, sym=True)
+        dynspec = dynspec*f_window[np.newaxis,:]
+
+    if pad:
+        nt = dynspec.shape[0]
+        nf = dynspec.shape[1]
+        dspec = np.copy(dynspec)
+        dynspec = np.zeros( (nt*2, nf) )
+        dynspec[nt//2:nt+nt//2, :] += dspec
+
+    SS = slow_FT(dynspec, freq)
+    
+    return SS
+
+
+def create_SSwindow(dynspec, freq, mask, pad=1, taper=1):
     """
     Create secondary spectrum from dynamic spectrum,
     using slow FT for frequency correction
@@ -142,8 +202,27 @@ def create_SS(dynspec, freq, mask):
     freq: array of floats
     Frequencies of each channel in MHz    
     mask: ndarray of floats [time, freq]
+    pad: Boolean - padding factor of the dynspec in time
+    taper: Apply a Tukey Window to the dynspec
     """
-    
+
+    if taper:
+        import scipy.signal
+        t_window = scipy.signal.windows.tukey(dynspec.shape[0], alpha=0.2, sym=True)
+        dynspec *= t_window[:,np.newaxis]
+        f_window = scipy.signal.windows.tukey(dynspec.shape[1], alpha=0.2, sym=True)
+        dynspec *= f_window[np.newaxis,:]
+
+    if pad:
+        nt = dynspec.shape[0]
+        nf = dynspec.shape[1]
+        dspec = np.copy(dynspec)
+        dynspec = np.zeros( (nt*2, nf) )
+        dynspec[nt//2:nt+nt//2, :] += dspec
+        m = np.copy(mask)
+        mask = np.zeros( (nt*2, nf) )
+        mask[nt//2:nt+nt//2, :] += m
+
     SS = slow_FT(dynspec, freq)
     SS = np.fft.ifftshift(SS)
     SS_ccorr = np.fft.ifft2(abs(SS)**2.0)
@@ -155,10 +234,10 @@ def create_SS(dynspec, freq, mask):
     SSm_ccorr = np.fft.ifft2(abs(SSm)**2.0)
     SSm_ccorr /= np.max(SSm_ccorr)
 
-    SS_corrected = np.fft.fft2(SS_ccorr / abs(SSm_ccorr))
+    SS_corrected = np.fft.fft2(abs(SS_ccorr) / abs(SSm_ccorr))
     SS_corrected = np.fft.fftshift(SS_corrected)
     
-    return SS_corrected
+    return abs(SS)
 
 
 def parabola(x, xs, a, C):
