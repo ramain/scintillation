@@ -5,17 +5,21 @@ from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation, AltAz
 from itertools import combinations
 
-def coordinates(T, source, observatories, plots=True):
+def coordinates(t0, source, observatories, plots=True, dT=24.):
      """
-     T:  astropy Time, midnight on date of interest
+     t0:  astropy Time, starting time of interest
      source: astropy SkyCoord of your source
      observatories:  Observatory dictionary of EarthLocations
+     plots:  Whether you want the default rise/set plot
+     dT: time in hours beyond t0
+
+     returns points of alt, az, and time
      """
      
-     midnight = T
-     delta_midnight = np.linspace(-24, 24, 1000)*u.hour
+     midnight = t0
+     delta_midnight = np.linspace(0, dT, 1000)*u.hour
      
-     plt.figure(figsize=(14, 8))
+     plt.figure(figsize=(10, 5))
 
      if isinstance(observatories, dict):
          altazs = np.zeros((len(observatories.items()), 2, 1000) )
@@ -35,10 +39,11 @@ def coordinates(T, source, observatories, plots=True):
   
 
      if plots:
+         plt.axhline(30, linestyle='--', color='r')
          plt.axhline(10, linestyle='--', color='b')
          plt.axhline(0, linestyle='--', color='k')
          
-         plt.xlim(-24,24)
+         plt.xlim(0,dT)
          plt.legend()
          plt.grid()
          
@@ -46,7 +51,7 @@ def coordinates(T, source, observatories, plots=True):
          plt.xlabel('Hours from midnight', fontsize=18)
          plt.show()
          
-     return altazs
+     return altazs, t0+delta_midnight
 
  
 def UV(T, source, tel1, tel2):
@@ -77,18 +82,25 @@ def UV(T, source, tel1, tel2):
     return uvw
 
 
-def UV_all(T, source, observatories, plots=True):
+def UV_all(t0, source, observatories, plots=True, dT=24.):
     """
-    T:  array of times, containing your observation
+    t0:  start time of your observation
     source:  astropy SkyCoord
     observatories:  dictionary of astropy EarthLocations
-    """     
+    plots:  boolean, whether to create default plots
+
+    returns the UVW matrix of all baselines for duration of obs.
+    """
+    T = t0 + np.linspace(0, dT, 1000)*u.hour
     nb = len(observatories.items())
     uvw_mat = np.zeros((nb*(nb-1), len(T), 3))
     i = 0
     b = []
+
+    if plots:
+         plt.figure(figsize=(6,6))
     
-    for tel1,tel2 in combinations(sorted(observatories.items()), 2):  # 2 for pairs, 3 for triplets, etc
+    for tel1,tel2 in combinations(sorted(observatories.items()), 2):
         name1 = tel1[0]
         name2 = tel2[0]
         b.append(name1+" - "+name2)
@@ -106,10 +118,10 @@ def UV_all(T, source, observatories, plots=True):
         i += 1
 
     if plots:
-        vlim = np.max(uvw_mat[(0,1)])/1000000.
+        vlim = np.max(uvw_mat.ravel())/1000000.
         plt.xlim(-1.1*vlim, 1.1*vlim)
         plt.ylim(-1.1*vlim, 1.1*vlim)
         plt.show()
         
-    return uvw_mat
+    return uvw_mat, T
 
