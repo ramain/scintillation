@@ -29,7 +29,7 @@ class Observatories:
             obsipos = EarthLocation(xi,yi,zi)
             observatories[obsi] = obsipos
 
-        self.a = observatories
+        self.allobs = observatories
 
         if leap:
             self.LEAP()
@@ -45,7 +45,7 @@ class Observatories:
     def subset(self, tels):
         sub = defaultdict(dict)
         for tel in tels:
-            sub[tel] = self.a[tel]
+            sub[tel] = self.allobs[tel]
         return sub
     
     def LEAP(self):
