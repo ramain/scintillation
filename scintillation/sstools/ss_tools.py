@@ -66,7 +66,7 @@ def readpsrarch(fname, dedisperse=False):
     return data, freq
 
 
-def clean_foldspec(f, plots=True, mask=False):
+def clean_foldspec(f, plots=True, apply_mask=False):
     """
     Clean and rescale folded spectrum
     
@@ -76,6 +76,8 @@ def clean_foldspec(f, plots=True, mask=False):
     or [time, freq, phase] for single pol
     plots: Bool
     Create diagnostic plots
+    apply_mask: Bool
+    Multiply dynamic spectrum by mask
 
     Returns folded spectrum, after offset subtraction, scale
     multiplication, and RFI masking
@@ -108,7 +110,7 @@ def clean_foldspec(f, plots=True, mask=False):
     scl_inv[np.isinf(scl_inv)] = 0
     
     f_scl = (f - offs[...,np.newaxis]) * scl_inv[...,np.newaxis]
-    if mask:
+    if apply_mask:
         f_scl *= mask[...,np.newaxis]
     
     if plots:
