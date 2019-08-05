@@ -41,7 +41,7 @@ def slow_FT(dynspec, freqs):
     ntime = dynspec.shape[0]
     nfreq = dynspec.shape[1]
     r0 = np.fft.fftfreq(ntime)
-    delta_r = r0[0] - r0[1]
+    delta_r = r0[1] - r0[0]
     src = np.linspace(0,1,ntime).astype('float64')
     src = np.arange(ntime).astype('float64')
     
