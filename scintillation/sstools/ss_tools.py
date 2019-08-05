@@ -66,7 +66,7 @@ def readpsrarch(fname, dedisperse=False):
     return data, freq
 
 
-def clean_foldspec(f, plots=True):
+def clean_foldspec(f, plots=True, mask=False):
     """
     Clean and rescale folded spectrum
     
@@ -108,7 +108,8 @@ def clean_foldspec(f, plots=True):
     scl_inv[np.isinf(scl_inv)] = 0
     
     f_scl = (f - offs[...,np.newaxis]) * scl_inv[...,np.newaxis]
-    f_scl *= mask[...,np.newaxis]
+    if mask:
+        f_scl *= mask[...,np.newaxis]
     
     if plots:
         plt.figure(figsize=(14,4))
