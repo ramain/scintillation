@@ -12,12 +12,15 @@ class Observatories:
 
     """
     
-    def __init__(self, vlba=True, evn=True, lba=True, leap=True, lofar=True):
-    
-        T2 = os.environ.get('TEMPO2')
-        obsfile = T2+'/observatory/observatories.dat'        
+    def __init__(self, TEMPO2=False, vlba=True, evn=True, lba=True, leap=True, lofar=True):
+
+        if TEMPO2:
+            T2 = os.environ.get('TEMPO2')
+            obsfile = T2+'/observatory/observatories.dat'        
+        else:
+            obsfile = './observatories.dat'
+
         obsinfo = np.genfromtxt(obsfile, dtype=np.str)
-        
         observatories = defaultdict(dict)
         
         for i in range(obsinfo.shape[0]):
