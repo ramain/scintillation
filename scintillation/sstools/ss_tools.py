@@ -75,7 +75,7 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
     return data, F, T
 
 
-def readpsrarch(fname, dedisperse=False):
+def readpsrarch(fname, dedisperse=True):
     """
     Read pulsar archive directly using psrchive
     
