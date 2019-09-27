@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 from slowft import slow_FT
 
-def readpsrfits(fname, undo_scaling=True, dedisperse=False):
+def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
    
     """Read folded spectrum from psrfits file, based on Dana's code
     Parameters
@@ -21,15 +21,28 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False):
         output identical to psrchive within machine precision
     dedisperse : True or False
         Roll in phase by closest incoherent time-shift, using the in-header
-        values of DM, tbin
+        values of DM, tbin.  Phase 0 point is arbitrary
+
+    Returns: Data cube [time, pol, freq, phase], 
+             frequency array [freq], 
+             time array [time]
     """
 
     f = fits.open(fname)
     freq = f['SUBINT'].data['DAT_FREQ'][0]
+    F = freq*u.MHz
+    
     shape = f['SUBINT'].data[0][-1].shape
     nt = f['SUBINT'].header['NAXIS2']
     nchan = shape[1]
 
+    # Exact start time is encompassed in three header values
+    t0 = Time(f['PRIMARY'].header['STT_IMJD'], format='mjd', precision=9)
+    t0 += (f['PRIMARY'].header['STT_SMJD'] + f['PRIMARY'].header['STT_OFFS']) *u.s
+    # Array of subint lengths, 
+    Tint = f['SUBINT'].data['TSUBINT']*u.s
+    T = t0 + np.cumsum(Tint)
+    
     # Read and polulate data with each subint, one at a time
     data = np.zeros((nt,shape[0],shape[1],shape[2]), dtype=np.float32)
     for i in np.arange(nt):
@@ -52,10 +65,29 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False):
             tshift = np.int(np.rint(dt/tbin))
             data[:,:,i,:] = np.roll(data[:,:,i,:],tshift,axis=-1)
 
-    return data, freq
+    # Print some basic obs. info
+    if verbose:
+        print("Observed with {0}".format(f['Primary'].header['TELESCOP']) )
+        print("Source: {0}".format(f['Primary'].header['SRC_NAME']) )
+        print("fref: {0}, chans: {1}".format(fref, (F[1]-F[0]) ) )
+        print("t0: {0}, tend: {1} \n \n".format(T[0].isot, T[-1].isot) )      
+
+    return data, F, T
 
 
 def readpsrarch(fname, dedisperse=False):
+    """
+    Read pulsar archive directly using psrchive
+    
+    Parameters
+    ----------
+    fname: string
+    file directory
+    dedisperse: Bool
+    apply psrchive's by-channel incoherent de-dispersion
+
+    Returns archive data cube, frequency array
+    """
     import psrchive
     
     arch = psrchive.Archive_load(fname)
@@ -66,72 +98,104 @@ def readpsrarch(fname, dedisperse=False):
     return data, freq
 
 
-def clean_foldspec(f, plots=True, apply_mask=False):
+def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var'):
     """
     Clean and rescale folded spectrum
     
     Parameters
     ----------
-    f: ndarray [time, pol, freq, phase]
+    I: ndarray [time, pol, freq, phase]
     or [time, freq, phase] for single pol
     plots: Bool
     Create diagnostic plots
     apply_mask: Bool
     Multiply dynamic spectrum by mask
+    rfimethod: String
+    RFI flagging method, currently only supports var
 
-    Returns folded spectrum, after offset subtraction, scale
-    multiplication, and RFI masking
+    Returns folded spectrum, after bandpass division, 
+    off-gate subtractionand RFI masking
     """
-    
+
     # Sum to form total intensity, mostly a memory/speed concern
-    if len(f.shape) == 4:
-        print(f.shape)
-        f = f[:,(0,1)].mean(1)
-    # Offset and scaling in each subint
-    offs = np.mean(f, axis=-1)
-    scl = np.std(f, axis=-1)
-    scl_inv = 1 / (scl)
-    scl_inv[np.isinf(scl_inv)] = 0
-    
-    # Create boolean mask from scale factors
-    mask = np.zeros_like(scl_inv)
-    mask[scl_inv<0.2] = 0
-    mask[scl_inv>0.2] = 1
-    
-    # Apply scales, sum time, freq, to find profile and off-pulse region
-    f_scl = (f - offs[...,np.newaxis]) * scl_inv[...,np.newaxis]
-    prof = f_scl.mean(0).mean(0)
-    off_gates = np.argwhere(prof < np.median(prof)).squeeze()
+    if len(I.shape) == 4:
+        print(I.shape)
+        I = I[:,(0,1)].mean(1)
 
-    # Re-compute scales from off-pulse region
-    offs = np.mean(f[...,off_gates], axis=-1)
-    scl = np.std(f[...,off_gates], axis=-1)
-    scl_inv = 1 / (scl)
-    scl_inv[np.isinf(scl_inv)] = 0
+    # Use median over time to not be dominated by outliers
+    bpass = np.median( I.mean(-1, keepdims=True), axis=0, keepdims=True)
+    foldspec = I / bpass
     
-    f_scl = (f - offs[...,np.newaxis]) * scl_inv[...,np.newaxis]
-    if apply_mask:
-        f_scl *= mask[...,np.newaxis]
-    
-    if plots:
-        plt.figure(figsize=(14,4))
-        plt.subplot(131)
-        plt.plot(f_scl.mean(0).mean(0))
+    mask = np.ones_like(I.mean(-1))
+
+    if rfimethod == 'var':
+        flag = np.std(foldspec, axis=-1)
+
+        # find std. dev of flag values without outliers
+        flag_series = np.sort(flag.ravel())
+        flagsize = len(flag_series)
+        flagmid = slice(int(flagsize//4), int(3*flagsize//4) )
+        flag_std = np.std(flag_series[flagmid])
+        flag_mean = np.mean(flag_series[flagmid])
+
+        # Mask all values over 10 sigma of the mean
+        mask[flag > flag_mean+10*flag_std] = 0
+
+        # If more than 50% of subints are bad in a channel, zap whole channel
+        mask[:, mask.mean(0)<0.5] = 0
+        if apply_mask:
+            I = I*mask[...,np.newaxis]
+
+    # determine off_gates as lower 50% of profile
+    profile = I.mean(0).mean(0)
+    off_gates = np.argwhere(profile<np.median(profile)).squeeze()
+
+    # renormalize, now that RFI are zapped
+    bpass = I[...,off_gates].mean(-1, keepdims=True).mean(0, keepdims=True)
+    foldspec = I / bpass
+    foldspec[np.isnan(foldspec)] = 0
+    foldspec -= np.mean(foldspec[...,off_gates], axis=-1, keepdims=True)
         
-        plt.subplot(132)
-        plt.title('Manual off-gate offset (log10)')
-        plt.xlabel('time (bins)')
-        plt.ylabel('freq (bins)')
-        plt.imshow(np.log10(offs).T, aspect='auto')
+    if plots:
+        plot_diagnostics(foldspec, flag, mask)
 
-        plt.subplot(133)
-        plt.title('Manual off-gate scaling')
-        plt.imshow(scl_inv.T, aspect='auto')
-        plt.xlabel('time (bins)')
+    return foldspec, flag, mask
 
-    return f_scl, mask
+def plot_diagnostics(foldspec, flag, mask):
+    # Need to add labels, documentation
+    
+    plt.figure(figsize=(15,10))
+    
+    plt.subplot(231)
+    plt.plot(foldspec.mean(0).mean(0))
+        
+    plt.subplot(232)
+    plt.title('RFI flagging parameter (log10)')
+    plt.xlabel('time (bins)')
+    plt.ylabel('freq (bins)')
+    plt.imshow(np.log10(flag).T, aspect='auto')
 
-def create_dynspec(foldspec, profsig=5.):
+    plt.subplot(233)
+    plt.title('Manual off-gate scaling')
+    plt.imshow(mask.T, aspect='auto', cmap='Greys')
+    plt.xlabel('time (bins)')
+    
+    plt.subplot(234)
+    plt.imshow(foldspec.mean(0), aspect='auto')
+    plt.xlabel('phase')
+    plt.ylabel('freq')
+
+    plt.subplot(235)
+    plt.imshow(foldspec.mean(1), aspect='auto')
+    plt.xlabel('phase')
+    plt.ylabel('time')
+
+    plt.subplot(236)
+    plt.imshow(foldspec.mean(2).T, aspect='auto')
+    plt.xlabel('time')
+    plt.ylabel('freq')
+
+def create_dynspec(foldspec, profsig=5., bint=1):
     """
     Create dynamic spectrum from folded data cube
     
@@ -141,6 +205,7 @@ def create_dynspec(foldspec, profsig=5.):
     ----------                                                                                                         
     foldspec: [time, frequency, phase] array
     profsig: S/N value, mask all profile below this
+    bint: integer, bin dynspec by this value in time
     """
     
     # Create profile by summing over time, frequency, normalize peak to 1
@@ -153,7 +218,10 @@ def create_dynspec(foldspec, profsig=5.):
     profplot2 = np.concatenate((template, template), axis=0)
 
     # Multiply the profile by the template, sum over phase
+    
     dynspec = (foldspec*template[np.newaxis,np.newaxis,:]).mean(-1)
+    tbins = int(dynspec.shape[0] // bint)
+    dynspec = dynspec[-bint*tbins:].reshape(tbins, bint, -1).mean(1)
     dynspec /= np.std(dynspec)
 
     return dynspec
@@ -187,7 +255,7 @@ def create_SS(dynspec, freq, pad=1, taper=1):
         dynspec = np.zeros( (nt*2, nf) )
         dynspec[nt//2:nt+nt//2, :] += dspec
 
-    SS = slow_FT(dynspec, freq)
+    SS = slow_FT(dynspec.astype('float64'), freq)
     
     return SS
 
@@ -212,9 +280,9 @@ def create_SSwindow(dynspec, freq, mask, pad=1, taper=1):
     if taper:
         import scipy.signal
         t_window = scipy.signal.windows.tukey(dynspec.shape[0], alpha=0.2, sym=True)
-        dynspec *= t_window[:,np.newaxis]
+        dynspec = dynspec*t_window[:,np.newaxis]
         f_window = scipy.signal.windows.tukey(dynspec.shape[1], alpha=0.2, sym=True)
-        dynspec *= f_window[np.newaxis,:]
+        dynspec = dynspec*f_window[np.newaxis,:]
 
     if pad:
         nt = dynspec.shape[0]
@@ -226,13 +294,13 @@ def create_SSwindow(dynspec, freq, mask, pad=1, taper=1):
         mask = np.zeros( (nt*2, nf) )
         mask[nt//2:nt+nt//2, :] += m
 
-    SS = slow_FT(dynspec, freq)
+    SS = slow_FT(dynspec.astype('float64'), freq)
     SS = np.fft.ifftshift(SS)
     SS_ccorr = np.fft.ifft2(abs(SS)**2.0)
 
     mask_intrinsic = mask * dynspec.mean(-1, keepdims=True)
 
-    SSm = slow_FT(mask_intrinsic, freq)
+    SSm = slow_FT(mask_intrinsic.astype('float64'), freq)
     SSm = np.fft.ifftshift(SSm)
     SSm_ccorr = np.fft.ifft2(abs(SSm)**2.0)
     SSm_ccorr /= np.max(SSm_ccorr)
@@ -240,7 +308,7 @@ def create_SSwindow(dynspec, freq, mask, pad=1, taper=1):
     SS_corrected = np.fft.fft2(abs(SS_ccorr) / abs(SSm_ccorr))
     SS_corrected = np.fft.fftshift(SS_corrected)
     
-    return abs(SS)
+    return abs(SS_corrected)
 
 
 def parabola(x, xs, a, C):
