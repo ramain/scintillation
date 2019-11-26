@@ -38,6 +38,9 @@ def slow_FT(dynspec, freqs):
         ndpointer (dtype=np.complex128, flags='CONTIGUOUS', ndim=2), # result [nr,nfreq]
     ]
 
+    # Cast dynamic spectrum as float 64
+    dynspec = dynspec.astype(np.float64)
+    
     ntime = dynspec.shape[0]
     nfreq = dynspec.shape[1]
     r0 = np.fft.fftfreq(ntime)
@@ -61,5 +64,7 @@ def slow_FT(dynspec, freqs):
     # Still need to FFT y axis, should change to pyfftw for memory and speed improvement
     result = np.fft.fft(result, axis=1)
     result = np.fft.fftshift(result, axes=1)
+    # flip along time axis
+    result = result[::-1]
     
     return result

@@ -98,7 +98,7 @@ def readpsrarch(fname, dedisperse=True):
     return data, freq
 
 
-def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var'):
+def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10):
     """
     Clean and rescale folded spectrum
     
@@ -128,8 +128,11 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var'):
     
     mask = np.ones_like(I.mean(-1))
 
+    prof_dirty = (I - I.mean(-1, keepdims=True)).mean(0).mean(0)
+    off_gates = np.argwhere(prof_dirty<np.median(prof_dirty)).squeeze()
+    
     if rfimethod == 'var':
-        flag = np.std(foldspec, axis=-1)
+        flag = np.std(foldspec[..., off_gates], axis=-1)
 
         # find std. dev of flag values without outliers
         flag_series = np.sort(flag.ravel())
@@ -139,7 +142,7 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var'):
         flag_mean = np.mean(flag_series[flagmid])
 
         # Mask all values over 10 sigma of the mean
-        mask[flag > flag_mean+10*flag_std] = 0
+        mask[flag > flag_mean+flagval*flag_std] = 0
 
         # If more than 50% of subints are bad in a channel, zap whole channel
         mask[:, mask.mean(0)<0.5] = 0
