@@ -86,7 +86,7 @@ def readpsrarch(fname, dedisperse=True):
     dedisperse: Bool
     apply psrchive's by-channel incoherent de-dispersion
 
-    Returns archive data cube, frequency array
+    Returns archive data cube, frequency array, time(mjd) array
     """
     import psrchive
     
@@ -94,11 +94,22 @@ def readpsrarch(fname, dedisperse=True):
     if dedisperse:
         arch.dedisperse()
     data = arch.get_data()
-    freq = arch.get_frequencies()
-    return data, freq
+    F = arch.get_frequencies()
+    a = arch.start_time()
+    t0 = a.strtempo()
+    t0 = Time(float(t0), format='mjd', precision=0)
+
+    # Get frequency and time info for plot axes
+    nt = data.shape[0]
+    Tobs = arch.integration_length()
+    dt = (Tobs / nt)*u.s
+    T = t0 + np.arange(nt)*dt
+    T = T.mjd
+    
+    return data, F, T
 
 
-def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10):
+def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10, offpulse='True', tolerance=0.5):
     """
     Clean and rescale folded spectrum
     
@@ -132,8 +143,10 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10)
     off_gates = np.argwhere(prof_dirty<np.median(prof_dirty)).squeeze()
     
     if rfimethod == 'var':
-        flag = np.std(foldspec[..., off_gates], axis=-1)
-
+        if offpulse:
+            flag = np.std(foldspec[..., off_gates], axis=-1)
+        else:
+            flag = np.std(foldspec, axis=-1)
         # find std. dev of flag values without outliers
         flag_series = np.sort(flag.ravel())
         flagsize = len(flag_series)
@@ -145,7 +158,7 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10)
         mask[flag > flag_mean+flagval*flag_std] = 0
 
         # If more than 50% of subints are bad in a channel, zap whole channel
-        mask[:, mask.mean(0)<0.5] = 0
+        mask[:, mask.mean(0)<tolerance] = 0
         if apply_mask:
             I = I*mask[...,np.newaxis]
 
@@ -203,6 +216,8 @@ def create_dynspec(foldspec, profsig=5., bint=1):
     Create dynamic spectrum from folded data cube
     
     Uses average profile as a weight, sums over phase
+
+    Returns: dynspec, np array [t, f]
 
     Parameters 
     ----------                                                                                                         
