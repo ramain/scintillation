@@ -35,6 +35,8 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
     shape = f['SUBINT'].data[0][-1].shape
     nt = f['SUBINT'].header['NAXIS2']
     nchan = shape[1]
+    npol = shape[0]
+    ngate = shape[2]
 
     # Exact start time is encompassed in three header values
     t0 = Time(f['PRIMARY'].header['STT_IMJD'], format='mjd', precision=9)
@@ -44,19 +46,19 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
     T = t0 + np.cumsum(Tint)
     
     # Read and polulate data with each subint, one at a time
-    data = np.zeros((nt,shape[0],shape[1],shape[2]), dtype=np.float32)
+    data = np.zeros((nt,npol,nchan,ngate), dtype=np.float32)
     for i in np.arange(nt):
         data[i,:,:,:] = f['SUBINT'].data[i][-1]
-    
+    print(data.shape)
     if undo_scaling:
         # Data scale factor (outval=dataval*scl + offs) 
-        scl = f['SUBINT'].data['DAT_SCL'].reshape(nt, 4, nchan)
-        offs = f['SUBINT'].data['DAT_OFFS'].reshape(nt, 4, nchan)
+        scl = f['SUBINT'].data['DAT_SCL'].reshape(nt, npol, nchan)
+        offs = f['SUBINT'].data['DAT_OFFS'].reshape(nt, npol, nchan)
         data = data * scl[...,np.newaxis] + offs[..., np.newaxis]
 
     # Remove best integer bin incoherent time shift
+    fref = f['HISTORY'].data['CTR_FREQ'][0]
     if dedisperse:
-        fref = f['HISTORY'].data['CTR_FREQ'][0]
         DM = f['SUBINT'].header['DM']
         tbin = f['HISTORY'].data['Tbin'][0]
 
@@ -159,8 +161,10 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
 
         # If more than 50% of subints are bad in a channel, zap whole channel
         mask[:, mask.mean(0)<tolerance] = 0
+        mask[mask.mean(1)<tolerance] = 0
         if apply_mask:
-            I = I*mask[...,np.newaxis]
+            #I = I*mask[...,np.newaxis]
+            I[mask < 0.5] = np.mean(I[mask > 0.5])
 
     # determine off_gates as lower 50% of profile
     profile = I.mean(0).mean(0)
@@ -169,7 +173,7 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
     # renormalize, now that RFI are zapped
     bpass = I[...,off_gates].mean(-1, keepdims=True).mean(0, keepdims=True)
     foldspec = I / bpass
-    foldspec[np.isnan(foldspec)] = 0
+    foldspec[np.isnan(foldspec)] = np.nanmean(foldspec)
     foldspec -= np.mean(foldspec[...,off_gates], axis=-1, keepdims=True)
         
     if plots:
