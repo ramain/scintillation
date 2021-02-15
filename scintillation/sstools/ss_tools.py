@@ -96,7 +96,11 @@ def readpsrarch(fname, dedisperse=True):
     if dedisperse:
         arch.dedisperse()
     data = arch.get_data()
-    F = arch.get_frequencies()
+    midf = arch.get_centre_frequency()
+    bw = arch.get_bandwidth()
+    F = np.linspace(midf-bw/2., midf+bw/2., data.shape[2], endpoint=False)
+    #F = arch.get_frequencies()
+
     a = arch.start_time()
     t0 = a.strtempo()
     t0 = Time(float(t0), format='mjd', precision=0)
