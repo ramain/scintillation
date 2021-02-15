@@ -7,7 +7,7 @@ from astropy.coordinates import ICRS, Galactic, FK4, FK5
 
 import matplotlib.pyplot as plt
 
-from slowft import slow_FT
+from .slowft import slow_FT
 
 def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
    
@@ -126,8 +126,15 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
     rfimethod: String
     RFI flagging method, currently only supports var
 
-    Returns folded spectrum, after bandpass division, 
-    off-gate subtractionand RFI masking
+    Returns
+    ------- 
+    foldspec: folded spectrum, after bandpass division, 
+    off-gate subtraction and RFI masking
+    flag: std. devs of each subint used for RFI flagging
+    mask: boolean RFI mask
+    bg: Ibg(t, f) subtracted from foldspec
+    bpass: Ibg(f), an estimate of the bandpass
+    
     """
 
     # Sum to form total intensity, mostly a memory/speed concern
@@ -174,12 +181,78 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
     bpass = I[...,off_gates].mean(-1, keepdims=True).mean(0, keepdims=True)
     foldspec = I / bpass
     foldspec[np.isnan(foldspec)] = np.nanmean(foldspec)
-    foldspec -= np.mean(foldspec[...,off_gates], axis=-1, keepdims=True)
+    bg = np.mean(foldspec[...,off_gates], axis=-1, keepdims=True)
+    foldspec = foldspec - bg
         
     if plots:
         plot_diagnostics(foldspec, flag, mask)
 
-    return foldspec, flag, mask
+    return foldspec, flag, mask, bg.squeeze(), bpass.squeeze()
+
+
+def rfifilter_median(dynspec, xs=20, ys=4, sigma=3., fsigma=5., tsigma=0., iters=3):
+    """
+    Flag hot pixels, as well as anomalous t,f bins in 
+    a dynamic spectrum using a median filter
+    
+    Parameters
+    ----------
+    dynspec: ndarray [time, freq]
+    xs: Filter size in time
+    ys: Filter size in freq
+    sigma: threshold for bad pixels in residuals
+    fsigma: threshold for bad channels
+    tsigma: threshold for bad time bins
+    iters: int, number of iterations for median filter
+
+    Returns
+    ------- 
+    ds_med: median filter of dynspec
+    mask_filter: boolean mask of RFI
+    
+    """
+
+    from scipy.ndimage import median_filter
+
+    ds_med = median_filter(dynspec, size=[xs,ys])
+    gfilter = dynspec-ds_med
+    mask_filter = np.ones_like(gfilter)
+
+    for i in range(iters):
+        if i == 0:
+            gfilter_masked = np.copy(gfilter)
+        sigmaclip = np.nanstd(gfilter_masked)*sigma
+        mask_filter[abs(gfilter)>sigmaclip] = 0
+        gfilter_masked[abs(gfilter)>sigmaclip] = np.nan
+        
+    frac = 100.*(mask_filter.size - 1.*np.sum(mask_filter)) / mask_filter.size
+    print('{0}/{1} = {2}% subints flagged '.format(
+          int(mask_filter.size - 1.*np.sum(mask_filter)), mask_filter.size, frac))
+        
+    # Filter channels
+    if fsigma > 0:
+        nchan = gfilter.shape[1]
+        gfilter_freq = np.nanstd(gfilter_masked, axis=0)
+        gfilter_freq = gfilter_freq / np.nanmedian(gfilter_freq)
+        chanthresh = fsigma*np.nanstd( np.sort(np.ravel(gfilter_freq))[nchan//8:7*nchan//8] )
+        badchan = np.argwhere( abs(gfilter_freq-1) > chanthresh).squeeze()
+        mask_filter[:,badchan] = 0
+        gfilter_masked[:,badchan] = np.nan
+        print('{0}/{1} channels flagged'.format(len(badchan), nchan))
+
+    # filter bad time bins
+    if tsigma > 0:
+        ntime = gfilter.shape[0]
+        gfilter_time = np.nanstd(gfilter_masked, axis=1)
+        gfilter_time = gfilter_time / np.nanmedian(gfilter_time)
+        timethresh = tsigma*np.nanstd( np.sort(np.ravel(gfilter_time))[ntime//8:7*ntime//8] )
+        badtbins = np.argwhere( abs(gfilter_time-1) > timethresh).squeeze()
+        mask_filter[badtbins] = 0
+        gfilter_masked[badtbins] = np.nan
+        print('{0}/{1} time bins flagged'.format(len(badtbins), ntime))
+
+    return ds_med, mask_filter
+
 
 def plot_diagnostics(foldspec, flag, mask):
     # Need to add labels, documentation
