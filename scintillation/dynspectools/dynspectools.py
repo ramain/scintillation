@@ -2,8 +2,6 @@ import numpy as np
 import astropy.units as u
 from astropy.io import fits
 from astropy.time import Time
-from astropy.coordinates import SkyCoord, EarthLocation, AltAz
-from astropy.coordinates import ICRS, Galactic, FK4, FK5
 
 import matplotlib.pyplot as plt
 
@@ -11,7 +9,7 @@ from .slowft import slow_FT
 
 def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
    
-    """Read folded spectrum from psrfits file, based on Dana's code
+    """Read folded spectrum from psrfits file, based on code from Dana Simard
     Parameters
     ----------
     fname : string
@@ -19,9 +17,11 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
     undo_scaling : True or False
         Remove the automatic normalization applied by psrfits.  This renders
         output identical to psrchive within machine precision
+        Notes from:
+        www.atnf.csiro.au/research/pulsar/psrfits_definition/PsrfitsDocumentation.html
     dedisperse : True or False
         Roll in phase by closest incoherent time-shift, using the in-header
-        values of DM, tbin.  Phase 0 point is arbitrary
+        values of DM, tbin.  Phase 0 point is currently arbitrary
 
     Returns: Data cube [time, pol, freq, phase], 
              frequency array [freq], 
@@ -80,7 +80,8 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
 def readpsrarch(fname, dedisperse=True):
     """
     Read pulsar archive directly using psrchive
-    
+    Requires the python psrchive bindings, only working in python2
+
     Parameters
     ----------
     fname: string
@@ -174,7 +175,6 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
         mask[:, mask.mean(0)<tolerance] = 0
         mask[mask.mean(1)<tolerance] = 0
         if apply_mask:
-            #I = I*mask[...,np.newaxis]
             I[mask < 0.5] = np.mean(I[mask > 0.5])
 
     # determine off_gates as lower 50% of profile
@@ -259,13 +259,26 @@ def rfifilter_median(dynspec, xs=20, ys=4, sigma=3., fsigma=5., tsigma=0., iters
 
 
 def plot_diagnostics(foldspec, flag, mask):
-    # Need to add labels, documentation
+    """
+    Plot the outputs of clean_foldspec, and different axis summations of foldspec
+
+    Parameters
+    ----------
+    foldspec: ndarray [time, freq, phase]
+    flag: ndarray [time, freq], std. dev of each subint
+    mask: ndarray [time, freq], boolean mask created from flag thresholds
+
+    """
     
     plt.figure(figsize=(15,10))
     
     plt.subplot(231)
-    plt.plot(foldspec.mean(0).mean(0))
-        
+    plt.plot(foldspec.mean(0).mean(0), color='k')
+    plt.xlabel('phase (bins)')
+    plt.ylabel('I (arb.)')
+    plt.title('Pulse Profile')
+    plt.xlim(0, foldspec.shape[-1])
+    
     plt.subplot(232)
     plt.title('RFI flagging parameter (log10)')
     plt.xlabel('time (bins)')
@@ -291,8 +304,9 @@ def plot_diagnostics(foldspec, flag, mask):
     plt.imshow(foldspec.mean(2).T, aspect='auto')
     plt.xlabel('time')
     plt.ylabel('freq')
+    
 
-def create_dynspec(foldspec, profsig=5., bint=1):
+def create_dynspec(foldspec, template=[1], profsig=5., bint=1, binf=1):
     """
     Create dynamic spectrum from folded data cube
     
@@ -303,29 +317,39 @@ def create_dynspec(foldspec, profsig=5., bint=1):
     Parameters 
     ----------                                                                                                         
     foldspec: [time, frequency, phase] array
-    profsig: S/N value, mask all profile below this
+    template: pulse profile I(phase), phase weights to create dynamic spectrum
+    profsig: S/N value, mask all profile below this (only if no template given)
     bint: integer, bin dynspec by this value in time
+    binf: integer, bin dynspec by this value in frequency
     """
     
-    # Create profile by summing over time, frequency, normalize peak to 1
-    template = foldspec.mean(0).mean(0)
-    template /= np.max(template)
+    # If no template provided, create profile by summing over time, frequency
+    if len(template) <= 1:
+        template = foldspec.mean(0).mean(0)
+        template /= np.max(template)
 
-    # Noise from bottom 50% of profile
-    tnoise = np.std(template[template<np.median(template)])
-    template[template < tnoise*profsig] = 0
+        # Noise estimated from bottom 50% of profile
+        tnoise = np.std(template[template<np.median(template)])
+        # Template zeroed below threshold
+        template[template < tnoise*profsig] = 0
+
     profplot2 = np.concatenate((template, template), axis=0)
 
     # Multiply the profile by the template, sum over phase
-    
     dynspec = (foldspec*template[np.newaxis,np.newaxis,:]).mean(-1)
-    tbins = int(dynspec.shape[0] // bint)
-    dynspec = dynspec[-bint*tbins:].reshape(tbins, bint, -1).mean(1)
-    dynspec /= np.std(dynspec)
 
+    if bint > 1:
+        tbins = int(dynspec.shape[0] // bint)
+        dynspec = dynspec[-bint*tbins:].reshape(tbins, bint, -1).mean(1)
+    if binf > 1:
+        dynspec = dynspec.reshape(dynspec.shape[0], -1, binf).mean(-1)
+
+    # normalize to std dev of 1 (perhaps remove this step)
+    dynspec = dynspec / np.std(dynspec)
     return dynspec
 
-def create_SS(dynspec, freq, pad=1, taper=1):
+
+def create_secspec(dynspec, freq, pad=1, taper=1):
     """
     Create secondary spectrum from dynamic spectrum,
     using slow FT for frequency correction
@@ -354,13 +378,16 @@ def create_SS(dynspec, freq, pad=1, taper=1):
         dynspec = np.zeros( (nt*2, nf) )
         dynspec[nt//2:nt+nt//2, :] += dspec
 
-    SS = slow_FT(dynspec.astype('float64'), freq)
+    S = slow_FT(dynspec.astype('float64'), freq)
     
-    return SS
+    return S
 
 
-def create_SSwindow(dynspec, freq, mask, pad=1, taper=1):
+def create_secspecwindow(dynspec, freq, mask, pad=1, taper=1):
     """
+    NOTE: This is a sub-optimal deconvolution of window function
+    Leaving here for legacy reasons.
+
     Create secondary spectrum from dynamic spectrum,
     using slow FT for frequency correction
     
@@ -408,7 +435,6 @@ def create_SSwindow(dynspec, freq, mask, pad=1, taper=1):
     SS_corrected = np.fft.fftshift(SS_corrected)
     
     return abs(SS_corrected)
-
 
 def parabola(x, xs, a, C):
     return a*(x-xs)**2.0 + C
