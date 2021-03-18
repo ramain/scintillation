@@ -436,6 +436,39 @@ def create_secspecwindow(dynspec, freq, mask, pad=1, taper=1):
     
     return abs(SS_corrected)
 
+
+def psrflux_wrapper(dynspec, dynspec_errs, F, t, fname):
+    """
+    Write dynamic spectrum along with column info in 
+    psrflux format, compatible with scintools
+    
+    dynspec: ndarray [time, frequency]
+    dynspec_errs: ndarray [time, frequency]
+    F: astropy unit, channel frequency
+    t: astropy Time values for each subintegration
+    fname: filename to write psrflux dynspec to
+    """
+    T_minute = (t.unix - t[0].unix)/60.
+    dt = (T_minute[1] - T_minute[0])/2.
+    T_minute = T_minute + dt
+    F_MHz = F.to(u.MHz).value
+    with open(fname, 'w') as fn:
+        fn.write("# Dynamic spectrum in psrflux format\n")
+        fn.write("# Created using scintillation.dynspectools\n")
+        fn.write("# MJD0: {0}\n".format(t[0].mjd))
+        fn.write("# Data columns:\n")
+        fn.write("# isub ichan time(min) freq(MHz) flux flux_err\n")
+        for i in range(len(T_minute)):
+            ti = T_minute[i]
+            for j in range(len(F)):
+                fi = F_MHz[j]
+                di = dynspec[i, j]
+                di_err = dynspec_errs[i, j]
+                fn.write("{0} {1} {2} {3} {4} {5}\n".format(i, j, 
+                                            ti, fi, di, di_err) )
+    print("Written dynspec to {0}".format(fname))
+
+
 def parabola(x, xs, a, C):
     return a*(x-xs)**2.0 + C
 
