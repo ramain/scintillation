@@ -437,7 +437,7 @@ def create_secspecwindow(dynspec, freq, mask, pad=1, taper=1):
     return abs(SS_corrected)
 
 
-def psrflux_wrapper(dynspec, dynspec_errs, F, t, fname):
+def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None):
     """
     Write dynamic spectrum along with column info in 
     psrflux format, compatible with scintools
@@ -456,8 +456,11 @@ def psrflux_wrapper(dynspec, dynspec_errs, F, t, fname):
         fn.write("# Dynamic spectrum in psrflux format\n")
         fn.write("# Created using scintillation.dynspectools\n")
         fn.write("# MJD0: {0}\n".format(t[0].mjd))
+        if psrname:
+            fn.write("# source: {0}\n".format(psrname))
         fn.write("# Data columns:\n")
         fn.write("# isub ichan time(min) freq(MHz) flux flux_err\n")
+
         for i in range(len(T_minute)):
             ti = T_minute[i]
             for j in range(len(F)):
@@ -467,6 +470,37 @@ def psrflux_wrapper(dynspec, dynspec_errs, F, t, fname):
                 fn.write("{0} {1} {2} {3} {4} {5}\n".format(i, j, 
                                             ti, fi, di, di_err) )
     print("Written dynspec to {0}".format(fname))
+
+
+def read_psrflux(fname):
+    """
+    Load dynamic spectrum from psrflux file
+    
+    Skeleton from scintools
+    
+    Returns: 
+    dynspec, dynspec_err, T, F
+    """
+
+    with open(fname, "r") as file:
+        for line in file:
+            if line.startswith("#"):
+                headline = str.strip(line[1:])
+                if str.split(headline)[0] == 'MJD0:':
+                    # MJD of start of obs
+                    mjd = float(str.split(headline)[1])
+                    
+    data = np.loadtxt(fname)
+    dt = int(np.max(data[:,0])+1)
+    df = int(np.max(data[:,1])+1)
+    
+    t = data[:dt,2]*u.s
+    F = data[:df,3]*u.MHz
+    dynspec = (data[:,4]).reshape(dt,df)
+    dynspec_err = (data[:,5]).reshape(dt,df)
+    T = Time(float(mjd), format='mjd') + t
+    
+    return dynspec, dynspec_err, T, F
 
 
 def parabola(x, xs, a, C):
