@@ -437,7 +437,7 @@ def create_secspecwindow(dynspec, freq, mask, pad=1, taper=1):
     return abs(SS_corrected)
 
 
-def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None):
+def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, note=None):
     """
     Write dynamic spectrum along with column info in 
     psrflux format, compatible with scintools
@@ -458,6 +458,8 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None):
         fn.write("# MJD0: {0}\n".format(t[0].mjd))
         if psrname:
             fn.write("# source: {0}\n".format(psrname))
+        if note:
+            fn.write("# {0}\n".format(note))
         fn.write("# Data columns:\n")
         fn.write("# isub ichan time(min) freq(MHz) flux flux_err\n")
 
