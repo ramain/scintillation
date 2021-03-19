@@ -447,6 +447,8 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, note=None):
     F: astropy unit, channel frequency
     t: astropy Time values for each subintegration
     fname: filename to write psrflux dynspec to
+    psrname: optional, string with source name
+    note: optional, note with additional information
     """
     T_minute = (t.unix - t[0].unix)/60.
     dt = (T_minute[1] - T_minute[0])/2.
@@ -481,7 +483,7 @@ def read_psrflux(fname):
     Skeleton from scintools
     
     Returns: 
-    dynspec, dynspec_err, T, F
+    dynspec, dynspec_err, T, F, source
     """
 
     with open(fname, "r") as file:
@@ -493,7 +495,7 @@ def read_psrflux(fname):
                     mjd = float(str.split(headline)[1])
                 if str.split(headline)[0] == 'source:':
                     # MJD of start of obs
-                    source = float(str.split(headline)[1])
+                    source = str.split(headline)[1]
 
     if not source:
         source = ''             
