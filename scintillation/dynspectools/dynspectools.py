@@ -491,7 +491,13 @@ def read_psrflux(fname):
                 if str.split(headline)[0] == 'MJD0:':
                     # MJD of start of obs
                     mjd = float(str.split(headline)[1])
-                    
+                if str.split(headline)[0] == 'source:':
+                    # MJD of start of obs
+                    source = float(str.split(headline)[1])
+
+    if not source:
+        source = ''             
+       
     data = np.loadtxt(fname)
     dt = int(np.max(data[:,0])+1)
     df = int(np.max(data[:,1])+1)
@@ -501,8 +507,8 @@ def read_psrflux(fname):
     dynspec = (data[:,4]).reshape(dt,df)
     dynspec_err = (data[:,5]).reshape(dt,df)
     T = Time(float(mjd), format='mjd') + t
-    
-    return dynspec, dynspec_err, T, F
+
+    return dynspec, dynspec_err, T, F, source
 
 
 def parabola(x, xs, a, C):
