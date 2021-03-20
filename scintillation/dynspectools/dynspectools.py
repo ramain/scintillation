@@ -77,7 +77,7 @@ def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
     return data, F, T
 
 
-def readpsrarch(fname, dedisperse=True):
+def readpsrarch(fname, dedisperse=True, verbose=True):
     """
     Read pulsar archive directly using psrchive
     Requires the python psrchive bindings, only working in python2
@@ -89,12 +89,18 @@ def readpsrarch(fname, dedisperse=True):
     dedisperse: Bool
     apply psrchive's by-channel incoherent de-dispersion
 
-    Returns archive data cube, frequency array, time(mjd) array
+    Returns archive data cube, frequency array, time(mjd) array, source name
     """
     import psrchive
     
     arch = psrchive.Archive_load(fname)
+    source = arch.get_source()
+    if verbose:
+        print("Read archive of {0} from {1}".format(source, fname))
+
     if dedisperse:
+        if verbose:
+            print("Dedispersing...")
         arch.dedisperse()
     data = arch.get_data()
     midf = arch.get_centre_frequency()
@@ -113,7 +119,7 @@ def readpsrarch(fname, dedisperse=True):
     T = t0 + np.arange(nt)*dt
     T = T.mjd
     
-    return data, F, T
+    return data, F, T, source
 
 
 def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10, offpulse='True', tolerance=0.5):
