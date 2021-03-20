@@ -510,7 +510,7 @@ def read_psrflux(fname):
     dt = int(np.max(data[:,0])+1)
     df = int(np.max(data[:,1])+1)
     
-    t = data[:dt,2]*u.s
+    t = data[::df,2]*u.s
     F = data[:df,3]*u.MHz
     dynspec = (data[:,4]).reshape(dt,df)
     dynspec_err = (data[:,5]).reshape(dt,df)
