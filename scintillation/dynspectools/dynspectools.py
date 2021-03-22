@@ -95,6 +95,7 @@ def readpsrarch(fname, dedisperse=True, verbose=True):
     
     arch = psrchive.Archive_load(fname)
     source = arch.get_source()
+    tel = arch.get_telescope()
     if verbose:
         print("Read archive of {0} from {1}".format(source, fname))
 
@@ -119,7 +120,7 @@ def readpsrarch(fname, dedisperse=True, verbose=True):
     T = t0 + np.arange(nt)*dt
     T = T.mjd
     
-    return data, F, T, source
+    return data, F, T, source, tel
 
 
 def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10, offpulse='True', tolerance=0.5):
@@ -443,7 +444,7 @@ def create_secspecwindow(dynspec, freq, mask, pad=1, taper=1):
     return abs(SS_corrected)
 
 
-def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, note=None):
+def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, telname=None, note=None):
     """
     Write dynamic spectrum along with column info in 
     psrflux format, compatible with scintools
@@ -454,6 +455,7 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, note=None):
     t: astropy Time values for each subintegration
     fname: filename to write psrflux dynspec to
     psrname: optional, string with source name
+    telname: optional, string with telescope
     note: optional, note with additional information
     """
     T_minute = (t.unix - t[0].unix)/60.
@@ -464,6 +466,8 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, note=None):
         fn.write("# Dynamic spectrum in psrflux format\n")
         fn.write("# Created using scintillation.dynspectools\n")
         fn.write("# MJD0: {0}\n".format(t[0].mjd))
+        if telname:
+            fn.write("# telescope: {0}\n".format(telname))
         if psrname:
             fn.write("# source: {0}\n".format(psrname))
         if note:
@@ -502,9 +506,13 @@ def read_psrflux(fname):
                 if str.split(headline)[0] == 'source:':
                     # MJD of start of obs
                     source = str.split(headline)[1]
+                if str.split(headline)[0] == 'telescope:':
+                    # MJD of start of obs
+                    telescope = str.split(headline)[1]
+                
 
     if not source:
-        source = ''             
+        source = ''
        
     data = np.loadtxt(fname)
     dt = int(np.max(data[:,0])+1)
