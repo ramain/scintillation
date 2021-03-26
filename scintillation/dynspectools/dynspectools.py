@@ -351,8 +351,6 @@ def create_dynspec(foldspec, template=[1], profsig=5., bint=1, binf=1):
     if binf > 1:
         dynspec = dynspec.reshape(dynspec.shape[0], -1, binf).mean(-1)
 
-    # normalize to std dev of 1 (perhaps remove this step)
-    dynspec = dynspec / np.std(dynspec)
     return dynspec
 
 
