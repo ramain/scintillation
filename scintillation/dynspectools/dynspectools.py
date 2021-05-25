@@ -507,9 +507,10 @@ def read_psrflux(fname):
                 if str.split(headline)[0] == 'telescope:':
                     # MJD of start of obs
                     telescope = str.split(headline)[1]
-                
-
-    if not source:
+       
+    try:
+        source
+    except NameError:
         source = ''
        
     data = np.loadtxt(fname)
