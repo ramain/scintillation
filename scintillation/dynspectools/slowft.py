@@ -1,7 +1,7 @@
 import numpy as np
 import os
 
-def slow_FT(dynspec, freqs):
+def slow_FT(dynspec, freqs, fref=None):
     """
     Slow FT of dynamic spectrum along points of
     t*(f / fref), account for phase scaling of f_D.
@@ -60,7 +60,8 @@ def slow_FT(dynspec, freqs):
 
     # Reference freq. to middle of band, should change this
     midf = len(freqs)//2
-    fref = freqs[midf]
+    if not 'fref' in locals():
+        fref = freqs[midf]
     fscale = freqs / fref
     fscale = fscale.astype('float64')
 

@@ -4,78 +4,7 @@ from astropy.io import fits
 from astropy.time import Time
 
 import matplotlib.pyplot as plt
-
-from .slowft import slow_FT
-
-def readpsrfits(fname, undo_scaling=True, dedisperse=False, verbose=True):
-   
-    """Read folded spectrum from psrfits file, based on code from Dana Simard
-    Parameters
-    ----------
-    fname : string
-        Fits file to be opened
-    undo_scaling : True or False
-        Remove the automatic normalization applied by psrfits.  This renders
-        output identical to psrchive within machine precision
-        Notes from:
-        www.atnf.csiro.au/research/pulsar/psrfits_definition/PsrfitsDocumentation.html
-    dedisperse : True or False
-        Roll in phase by closest incoherent time-shift, using the in-header
-        values of DM, tbin.  Phase 0 point is currently arbitrary
-
-    Returns: Data cube [time, pol, freq, phase], 
-             frequency array [freq], 
-             time array [time]
-    """
-
-    f = fits.open(fname)
-    freq = f['SUBINT'].data['DAT_FREQ'][0]
-    F = freq*u.MHz
-    
-    shape = f['SUBINT'].data[0][-1].shape
-    nt = f['SUBINT'].header['NAXIS2']
-    nchan = shape[1]
-    npol = shape[0]
-    ngate = shape[2]
-
-    # Exact start time is encompassed in three header values
-    t0 = Time(f['PRIMARY'].header['STT_IMJD'], format='mjd', precision=9)
-    t0 += (f['PRIMARY'].header['STT_SMJD'] + f['PRIMARY'].header['STT_OFFS']) *u.s
-    # Array of subint lengths, 
-    Tint = f['SUBINT'].data['TSUBINT']*u.s
-    T = t0 + np.cumsum(Tint)
-    
-    # Read and polulate data with each subint, one at a time
-    data = np.zeros((nt,npol,nchan,ngate), dtype=np.float32)
-    for i in np.arange(nt):
-        data[i,:,:,:] = f['SUBINT'].data[i][-1]
-    print(data.shape)
-    if undo_scaling:
-        # Data scale factor (outval=dataval*scl + offs) 
-        scl = f['SUBINT'].data['DAT_SCL'].reshape(nt, npol, nchan)
-        offs = f['SUBINT'].data['DAT_OFFS'].reshape(nt, npol, nchan)
-        data = data * scl[...,np.newaxis] + offs[..., np.newaxis]
-
-    # Remove best integer bin incoherent time shift
-    fref = f['HISTORY'].data['CTR_FREQ'][0]
-    if dedisperse:
-        DM = f['SUBINT'].header['DM']
-        tbin = f['HISTORY'].data['Tbin'][0]
-
-        for i in np.arange(len(freq)):
-            dt = (1 / 2.41e-4) * DM * (1./fref**2.-1./freq[i]**2.)
-            tshift = np.int(np.rint(dt/tbin))
-            data[:,:,i,:] = np.roll(data[:,:,i,:],tshift,axis=-1)
-
-    # Print some basic obs. info
-    if verbose:
-        print("Observed with {0}".format(f['Primary'].header['TELESCOP']) )
-        print("Source: {0}".format(f['Primary'].header['SRC_NAME']) )
-        print("fref: {0}, chans: {1}".format(fref, (F[1]-F[0]) ) )
-        print("t0: {0}, tend: {1} \n \n".format(T[0].isot, T[-1].isot) )      
-
-    return data, F, T
-
+from scipy.optimize import curve_fit
 
 def readpsrarch(fname, dedisperse=True, verbose=True):
     """
@@ -123,7 +52,7 @@ def readpsrarch(fname, dedisperse=True, verbose=True):
     return data, F, T, source, tel
 
 
-def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10, offpulse='True', tolerance=0.5):
+def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10, offpulse='True', tolerance=0.5, off_gates=0):
     """
     Clean and rescale folded spectrum
     
@@ -137,6 +66,11 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
     Multiply dynamic spectrum by mask
     rfimethod: String
     RFI flagging method, currently only supports var
+    tolerance: float
+    % of subints per channel to zap whole channel
+    off_gates: slice
+    manually chosen off_gate region.  If unset, the bottom 50%
+    of the profile is chosen
 
     Returns
     ------- 
@@ -161,8 +95,12 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
     mask = np.ones_like(I.mean(-1))
 
     prof_dirty = (I - I.mean(-1, keepdims=True)).mean(0).mean(0)
-    off_gates = np.argwhere(prof_dirty<np.median(prof_dirty)).squeeze()
-    
+    if not off_gates:
+        off_gates = np.argwhere(prof_dirty<np.median(prof_dirty)).squeeze()
+        recompute_offgates = 1
+    else:
+        recompute_offgates = 0
+
     if rfimethod == 'var':
         if offpulse:
             flag = np.std(foldspec[..., off_gates], axis=-1)
@@ -184,10 +122,13 @@ def clean_foldspec(I, plots=True, apply_mask=False, rfimethod='var', flagval=10,
         if apply_mask:
             I[mask < 0.5] = np.mean(I[mask > 0.5])
 
-    # determine off_gates as lower 50% of profile
+    
     profile = I.mean(0).mean(0)
-    off_gates = np.argwhere(profile<np.median(profile)).squeeze()
 
+    # redetermine off_gates, if off_gates not specified
+    if recompute_offgates:
+        off_gates = np.argwhere(profile<np.median(profile)).squeeze()
+    
     # renormalize, now that RFI are zapped
     bpass = I[...,off_gates].mean(-1, keepdims=True).mean(0, keepdims=True)
     foldspec = I / bpass
@@ -354,94 +295,6 @@ def create_dynspec(foldspec, template=[1], profsig=5., bint=1, binf=1):
     return dynspec
 
 
-def create_secspec(dynspec, freq, pad=1, taper=1):
-    """
-    Create secondary spectrum from dynamic spectrum,
-    using slow FT for frequency correction
-    
-    Parameters
-    ----------
-    dynspec: ndarray of floats [time, freq]
-    freq: array of floats
-    Frequencies of each channel in MHz    
-    mask: ndarray of floats [time, freq]
-    pad: Boolean - padding factor of the dynspec in time
-    taper: Apply a Tukey Window to the dynspec
-    """
-
-    if taper:
-        import scipy.signal
-        t_window = scipy.signal.windows.tukey(dynspec.shape[0], alpha=0.2, sym=True)
-        dynspec = dynspec*t_window[:,np.newaxis]
-        f_window = scipy.signal.windows.tukey(dynspec.shape[1], alpha=0.2, sym=True)
-        dynspec = dynspec*f_window[np.newaxis,:]
-
-    if pad:
-        nt = dynspec.shape[0]
-        nf = dynspec.shape[1]
-        dspec = np.copy(dynspec)
-        dynspec = np.zeros( (nt*2, nf) )
-        dynspec[nt//2:nt+nt//2, :] += dspec
-
-    S = slow_FT(dynspec.astype('float64'), freq)
-    
-    return S
-
-
-def create_secspecwindow(dynspec, freq, mask, pad=1, taper=1):
-    """
-    NOTE: This is a sub-optimal deconvolution of window function
-    Leaving here for legacy reasons.
-
-    Create secondary spectrum from dynamic spectrum,
-    using slow FT for frequency correction
-    
-    Divides out contribution from window function
-    
-    Parameters
-    ----------
-    dynspec: ndarray of floats [time, freq]
-    freq: array of floats
-    Frequencies of each channel in MHz    
-    mask: ndarray of floats [time, freq]
-    pad: Boolean - padding factor of the dynspec in time
-    taper: Apply a Tukey Window to the dynspec
-    """
-
-    if taper:
-        import scipy.signal
-        t_window = scipy.signal.windows.tukey(dynspec.shape[0], alpha=0.2, sym=True)
-        dynspec = dynspec*t_window[:,np.newaxis]
-        f_window = scipy.signal.windows.tukey(dynspec.shape[1], alpha=0.2, sym=True)
-        dynspec = dynspec*f_window[np.newaxis,:]
-
-    if pad:
-        nt = dynspec.shape[0]
-        nf = dynspec.shape[1]
-        dspec = np.copy(dynspec)
-        dynspec = np.zeros( (nt*2, nf) )
-        dynspec[nt//2:nt+nt//2, :] += dspec
-        m = np.copy(mask)
-        mask = np.zeros( (nt*2, nf) )
-        mask[nt//2:nt+nt//2, :] += m
-
-    SS = slow_FT(dynspec.astype('float64'), freq)
-    SS = np.fft.ifftshift(SS)
-    SS_ccorr = np.fft.ifft2(abs(SS)**2.0)
-
-    mask_intrinsic = mask * dynspec.mean(-1, keepdims=True)
-
-    SSm = slow_FT(mask_intrinsic.astype('float64'), freq)
-    SSm = np.fft.ifftshift(SSm)
-    SSm_ccorr = np.fft.ifft2(abs(SSm)**2.0)
-    SSm_ccorr /= np.max(SSm_ccorr)
-
-    SS_corrected = np.fft.fft2(abs(SS_ccorr) / abs(SSm_ccorr))
-    SS_corrected = np.fft.fftshift(SS_corrected)
-    
-    return abs(SS_corrected)
-
-
 def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, telname=None, note=None):
     """
     Write dynamic spectrum along with column info in 
@@ -460,6 +313,10 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, telname=None
     dt = (T_minute[1] - T_minute[0])/2.
     T_minute = T_minute + dt
     F_MHz = F.to(u.MHz).value
+
+    if fname.split('.')[-1] not in ['dspec', 'dynspec']:
+        fname = fname + ".dynspec"
+        
     with open(fname, 'w') as fn:
         fn.write("# Dynamic spectrum in psrflux format\n")
         fn.write("# Created using scintillation.dynspectools\n")
@@ -472,7 +329,7 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, telname=None
             fn.write("# {0}\n".format(note))
         fn.write("# Data columns:\n")
         fn.write("# isub ichan time(min) freq(MHz) flux flux_err\n")
-
+    
         for i in range(len(T_minute)):
             ti = T_minute[i]
             for j in range(len(F)):
@@ -481,8 +338,7 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, telname=None
                 di_err = dynspec_errs[i, j]
                 fn.write("{0} {1} {2} {3} {4} {5}\n".format(i, j, 
                                             ti, fi, di, di_err) )
-    print("Written dynspec to {0}".format(fname))
-
+    print("Written dynspec to {0}".format(fname))                   
 
 def read_psrflux(fname):
     """
@@ -525,35 +381,213 @@ def read_psrflux(fname):
 
     return dynspec, dynspec_err, T, F, source
 
+def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft=1, vm=3.,
+                 bint=1, binf = 1, npad=1, plot=True, sft=False):
 
-def parabola(x, xs, a, C):
-    return a*(x-xs)**2.0 + C
-
-def Hough(SS, ft, tau, srange, masksize=5.0):
-    """ Hough transform of secondary spectrum, 
-    calculates and returns summed power along a range of parabolae
+    """
+    dynspec:  array with units [time, frequency]
+    freqs: array of frequencies in MHz
+    dt: Size of time bins, astropy unit
+    xlim: xaxis limits in mHz
+    ylim: yaxis limits in mus
     
-    Parameters
-    ----------
-    SS: 2D ndarray of floats
-        Secondary Spectrum, scaling must be applied before
     
-    ft, tau: array of floats
-        fringe rate and time delay of the SS
-    srange: array of floats
-        parabolic curvatures to sum over
-    masksize: float
-        thickness of parabola in tau to sum in transform
+    vm: dynamic range of secspec
+    bintau:  Binning factor of SS in tau, for plotting purposes
+    binft:  Binning factor of S in ft, for plotting purposes
+    bint: Binning factor of dynspec in t, for plotting purposes
+    binf: Binning factor of dynspec in f, for plotting purposes
+    
+    Returns:
+    CS: 2D FFT of dynamic spectrum
+    ft: ft axis of CS
+    tau: tau axis of CS
     """
     
-    power = []
-    for slope in srange:
-        SS_masked = np.zeros_like(SS)
-        for i in range(len(ft)):
-            p1 = parabola(ft[i], 0, slope, 0)
-            SS_masked[i,np.argwhere((tau < p1+masksize) & (tau > p1-masksize))] += 1
-        SS_power = (SS*SS_masked).sum()
-        mask_power = SS_masked.sum()
-        power.append(SS_power/mask_power)
-        
-    return np.array(power)
+    # Get frequency and time info for plot axes
+    bw = freqs[-1] - freqs[0]
+    df = (freqs[1]-freqs[0])*u.MHz
+    nt = dynspec.shape[0]
+    T = (nt * dt).to(u.min).value
+    
+    # Bin dynspec in time, frequency 
+    # ONLY FOR PLOTTING
+    nbin = dynspec.shape[0]//bint
+    dspec_plot = dynspec[:nbin*bint].reshape(nbin, bint, dynspec.shape[-1]).mean(1)
+    if binf > 1:
+        dspec_plot = dspec_plot.reshape(dspec_plot.shape[0],-1, binf).mean(-1)
+    dspec_plot = dspec_plot / np.std(dspec_plot)
+    
+    # 2D power spectrum is the Secondary spectrum
+    if sft:
+        print('Slow FT')
+        if npad > 1:
+            pad_width= ((0, npad*dynspec.shape[0]), (0, 0))
+            dynpad = np.pad(dynspec, pad_width, mode='constant')
+
+            from scintillation.dynspectools.slowft import slow_FT
+            CS = slow_FT(dynpad, freqs, np.max(freqs))
+            S = np.abs(CS)**2.0
+            S = np.roll(S, 1, axis=0)
+
+    else:
+        if npad > 1:
+            pad_width= ((0, npad*dynspec.shape[0]), (0, 0))
+            dynpad = np.pad(dynspec, pad_width, mode='constant')
+            CS = np.fft.fft2(dynpad)
+        else:
+            CS = np.fft.fft2(dynspec)
+        S = np.fft.fftshift(CS)
+        S = np.abs(S)**2.0
+
+    
+    # Bin in tau and FT - ONLY AFTER SQUARING
+    Sb = S.reshape(-1,S.shape[1]//bintau, bintau).mean(-1)
+    if binft > 1:
+        nftbin = Sb.shape[0]//binft
+        print(Sb.shape)
+        Sb = Sb[:binft*nftbin].reshape(nftbin, binft, -1).mean(1)
+    Sb = np.log10(Sb)
+    
+    # Calculate the confugate frequencies (time delay, fringe rate), only used for plotting
+    ft = np.fft.fftfreq(S.shape[0], dt)
+    ft = np.fft.fftshift(ft.to(u.mHz).value)
+
+    tau = np.fft.fftfreq(S.shape[1], df)
+    tau = np.fft.fftshift(tau.to(u.microsecond).value)    
+    
+    slow = np.median(Sb)-0.2
+    shigh = slow + vm
+
+    # Not the nicest, have a set of different plots it can produce
+    if plot:
+        plt.figure(figsize=(10,10))
+        ax2 = plt.subplot2grid((2, 2), (0, 1), rowspan=2)
+        ax3 = plt.subplot2grid((2, 2), (0, 0), rowspan=2)
+
+        plt.subplots_adjust(wspace=0.1)
+
+        # Plot dynamic spectrum image
+
+        ax2.imshow(dspec_plot.T, aspect='auto', vmax=7, vmin=-3, origin='lower',
+                    extent=[0,T,min(freqs), max(freqs)], cmap='viridis')
+        ax2.set_xlabel('time (min)', fontsize=16)
+        ax2.set_ylabel('freq (MHz)', fontsize=16)
+        ax2.yaxis.tick_right()
+        ax2.yaxis.set_label_position("right")
+
+        # Plot Secondary spectrum
+        ax3.imshow(Sb.T, aspect='auto', vmin=slow, vmax=shigh, origin='lower',
+                   extent=[min(ft), max(ft), min(tau), max(tau)], interpolation='nearest',
+                  cmap='viridis')
+        ax3.set_xlabel(r'$f_{D}$ (mHz)', fontsize=16)
+        ax3.set_ylabel(r'$\tau$ ($\mu$s)', fontsize=16) 
+
+        if xlim:
+            ax3.set_xlim(-xlim, xlim)
+        if ylim:
+            ax3.set_ylim(-ylim, ylim)
+    return CS, ft, tau
+
+def Gaussfit(dynspec, df, dt):
+    
+    """
+    dynspec:  array with units [time, frequency]
+    df: channel width, astropy unit
+    dt: subint length, astropy unit
+    
+    Returns:
+    CS: 2D FFT of dynamic spectrum
+    ft: ft axis of CS
+    tau: tau axis of CS
+    """
+    
+    ccorr = np.fft.ifft2( np.fft.fft2(dynspec) * np.fft.fft2(dynspec).conj() )
+    ccorr = ccorr - np.median(ccorr)
+    
+    # Ignoring zero component with noise-noise correlation
+    ccorr_f = abs(ccorr[1]) + abs(ccorr[-1])
+    ccorr_f /= np.max(ccorr_f)
+    
+    ccorr_t = abs(ccorr[:,1]) + abs(ccorr[:,-1])
+    ccorr_t /= np.max(ccorr_t)
+
+    ft = np.fft.fftfreq(dynspec.shape[0], dt)
+    ft = np.fft.fftshift(ft.to(u.mHz).value)
+    
+    tau = np.fft.fftfreq(dynspec.shape[1], df)
+    tau = np.fft.fftshift(tau.to(u.microsecond).value)
+    
+    df_axis = np.fft.fftfreq(dynspec.shape[1], d=(tau[1]-tau[0]) )
+    dt_axis = np.fft.fftfreq(dynspec.shape[0], d=(ft[1]-ft[0])*u.mHz ).to(u.min).value
+    
+    # Starting guess, currently hardcoded
+    p0 = [5., 1, 0]
+    popt, pcov = curve_fit(Gaussian, df_axis, ccorr_f, p0=p0)
+
+    nuscint = abs(popt[0])
+    nuscint_err = np.sqrt(pcov[0,0])
+    
+    fscint =  np.sqrt(2*np.log(2)) * nuscint
+    fscinterr =  np.sqrt(2*np.log(2)) * nuscint_err
+    
+    # Starting guess, currently hardcoded
+    pT = [20, 1, 0]
+    poptT, pcovT = curve_fit(Gaussian, dt_axis, ccorr_t, p0=p0)
+    
+    tscint = np.sqrt(2) * abs(poptT[0]) * 60.
+    tscinterr = np.sqrt(2) * np.sqrt(pcov[0,0]) * 60.
+
+    # Compute "finite scintle error"
+    # THIS MAY BE BUGGY, I NEED TO TEST
+    Tobs = dynspec.shape[0] * dt.value / 60.
+    BW = dynspec.shape[1] * df.value
+    fillfrac = 0.2
+    
+    fin_scinterr = (1 + fillfrac * BW / nuscint) * (1 + fillfrac* Tobs / tscint)
+
+    tscinterr = np.sqrt( tscinterr**2 + tscint/fin_scinterr  )
+    fscinterr = np.sqrt( fscinterr**2 + fscint/fin_scinterr  )
+
+    ccorr = abs(ccorr)
+
+    vmax = np.mean(ccorr) + 10*np.std(ccorr)
+    vmin = np.mean(ccorr) - 3*np.std(ccorr)
+    
+    plt.figure(figsize=(8,8))
+
+    ax1 = plt.subplot2grid((4, 4), (1, 0), colspan=3, rowspan=3)
+    ax2 = plt.subplot2grid((4, 4), (1, 3), rowspan=3)
+    ax3 = plt.subplot2grid((4, 4), (0, 0), colspan=3)
+
+    plt.subplots_adjust(wspace=0.05)
+    
+    ax1.imshow(np.fft.fftshift(ccorr).T, aspect='auto', origin='lower',
+              extent=[min(dt_axis), max(dt_axis), min(df_axis), max(df_axis)],
+              vmax=vmax, vmin=vmin, cmap='Greys')
+
+    ax1.set_xlabel('dt (min)', fontsize=16)
+    ax1.set_ylabel(r'd$\nu$ (MHz)', fontsize=16)
+
+    df_shifted = np.fft.fftshift(df_axis)
+    dt_shifted = np.fft.fftshift(dt_axis)
+    ax2.plot( np.fft.fftshift(ccorr_f), df_shifted, color='k')
+    ax2.plot(Gaussian(df_shifted, *popt), df_shifted, color='tab:red',
+            linestyle='--')
+
+    ax2.yaxis.tick_right()
+    ax2.yaxis.set_label_position("right")
+    #ax2.set_ylabel(r'$d\nu$ (MHz)', fontsize=16)
+    ax2.set_xlabel(r'I (d$\nu$, dt=0)', fontsize=16)
+    ax2.set_ylim(min(df_axis), max(df_axis) )
+
+    ax3.plot( dt_shifted, np.fft.fftshift(ccorr_t), color='k')
+    ax3.plot( dt_shifted, Gaussian(dt_shifted, *poptT), color='tab:red',
+              linestyle='--')
+    ax3.set_ylabel(r'I (dt, d$\nu$=0)', fontsize=16)
+    ax3.set_xlim(min(dt_axis), max(dt_axis))
+    
+    return np.fft.fftshift(ccorr), fscint, fscinterr, tscint, tscinterr
+
+def Gaussian(x, sigma, A, C):
+    return A*np.exp( -x**2 / (2*sigma**2) ) + C
