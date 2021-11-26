@@ -274,7 +274,7 @@ def create_dynspec(foldspec, template=[1], profsig=5., bint=1, binf=1):
     # If no template provided, create profile by summing over time, frequency
     if len(template) <= 1:
         template = foldspec.mean(0).mean(0)
-        template /= np.max(template)
+        template = template / np.max(template)
 
         # Noise estimated from bottom 50% of profile
         tnoise = np.std(template[template<np.median(template)])
@@ -420,13 +420,16 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
     
     # 2D power spectrum is the Secondary spectrum
     if sft:
+        from scintillation.dynspectools.slowft import slow_FT
         print('Slow FT')
-        if npad > 1:
+        if npad >= 1:
             pad_width= ((0, npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
-
-            from scintillation.dynspectools.slowft import slow_FT
             CS = slow_FT(dynpad, freqs, np.max(freqs))
+            S = np.abs(CS)**2.0
+            S = np.roll(S, 1, axis=0)
+        else:
+            CS = slow_FT(dynspec, freqs, np.max(freqs))
             S = np.abs(CS)**2.0
             S = np.roll(S, 1, axis=0)
 
@@ -507,10 +510,10 @@ def Gaussfit(dynspec, df, dt):
     
     # Ignoring zero component with noise-noise correlation
     ccorr_f = abs(ccorr[1]) + abs(ccorr[-1])
-    ccorr_f /= np.max(ccorr_f)
+    ccorr_f = ccorr_f / np.max(ccorr_f)
     
     ccorr_t = abs(ccorr[:,1]) + abs(ccorr[:,-1])
-    ccorr_t /= np.max(ccorr_t)
+    ccorr_t = ccorr_t / np.max(ccorr_t)
 
     ft = np.fft.fftfreq(dynspec.shape[0], dt)
     ft = np.fft.fftshift(ft.to(u.mHz).value)
