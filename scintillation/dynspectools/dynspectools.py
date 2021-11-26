@@ -382,7 +382,7 @@ def read_psrflux(fname):
     return dynspec, dynspec_err, T, F, source
 
 def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft=1, vm=3.,
-                 bint=1, binf = 1, npad=1, plot=True, sft=False):
+                 bint=1, binf = 1, npad=1, submean=True, taper=True, plot=True, sft=False):
 
     """
     dynspec:  array with units [time, frequency]
@@ -413,6 +413,20 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
     # Bin dynspec in time, frequency 
     # ONLY FOR PLOTTING
     nbin = dynspec.shape[0]//bint
+    if submean:
+        dynspec = dynspec - np.mean(dynspec)
+
+    if taper:
+        taperlength_t = int(dynspec.shape[0]//10)
+        taperlength_f = int(dynspec.shape[1]//10)
+        window = np.ones_like(dynspec)
+        
+        window[:taperlength_t] *= np.hanning(2*taperlength_t)[:taperlength_t, np.newaxis]
+        window[-taperlength_t:] *= np.hanning(2*taperlength_t)[-taperlength_t:, np.newaxis]
+        window[:, :taperlength_f] *= np.hanning(2*taperlength_f)[np.newaxis, :taperlength_f]
+        window[:, -taperlength_f:] *= np.hanning(2*taperlength_f)[np.newaxis, -taperlength_f:]
+        dynspec = dynspec * window
+        
     dspec_plot = dynspec[:nbin*bint].reshape(nbin, bint, dynspec.shape[-1]).mean(1)
     if binf > 1:
         dspec_plot = dspec_plot.reshape(dspec_plot.shape[0],-1, binf).mean(-1)
