@@ -52,9 +52,11 @@ def slow_FT(dynspec, freqs, fref=None):
     nfreq = dynspec.shape[1]
     r0 = np.fft.fftfreq(ntime)
     delta_r = r0[1] - r0[0]
-    src = np.linspace(0, 1, ntime).astype('float64')
+    #src = np.linspace(0, 1, ntime).astype('float64')
     src = np.arange(ntime).astype('float64')
-
+    # center around zero, mirrors the effective 'trapezoid' effect
+    src = src - np.mean(src)
+    
     # declare the empty result array:
     SS = np.empty((ntime, nfreq), dtype=np.complex128)
 
@@ -83,7 +85,7 @@ def slow_FT(dynspec, freqs, fref=None):
         FTphase = -2j*np.pi*tscale[:, np.newaxis, :] * \
             ft[np.newaxis, :, np.newaxis]
         SS = np.sum(dynspec[:, np.newaxis, :]*np.exp(FTphase), axis=0)
-        SS = np.fft.fftshift(SS, axis=0)
+        SS = np.fft.fftshift(SS, axes=0)
 
     # Still need to FFT y axis, should change to pyfftw for memory and
     #   speed improvement
