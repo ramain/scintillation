@@ -423,7 +423,7 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
         from scintillation.dynspectools.slowft import slow_FT
         print('Slow FT')
         if npad >= 1:
-            pad_width= ((0, npad*dynspec.shape[0]), (0, 0))
+            pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
             CS = slow_FT(dynpad, freqs, np.max(freqs))
             S = np.abs(CS)**2.0
@@ -435,7 +435,7 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
 
     else:
         if npad > 1:
-            pad_width= ((0, npad*dynspec.shape[0]), (0, 0))
+            pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
             CS = np.fft.fft2(dynpad)
         else:
