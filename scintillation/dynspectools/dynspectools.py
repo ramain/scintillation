@@ -381,6 +381,93 @@ def read_psrflux(fname):
 
     return dynspec, dynspec_err, T, F, source
 
+
+def create_secspec(dynspec, freqs, dt=4*u.s, bintau=2, binft=1, npad=1, submean=True, taper=True, sft=False, fref=1400.):
+
+    """
+    dynspec:  array with units [time, frequency]
+    freqs: array of frequencies in MHz
+    dt: Size of time bins, astropy unit
+
+    bintau:  Binning factor of SS in tau, for plotting purposes
+    binft:  Binning factor of S in ft, for plotting purposes
+
+    Returns:
+    Sbin: secondary spectrum in final binning
+    ftbin: ft axis of Sbin
+    taubin: tau axis of Sbin
+    """
+    
+    # Get frequency and time info for plot axes
+    bw = freqs[-1] - freqs[0]
+    df = (freqs[1]-freqs[0])*u.MHz
+    nt = dynspec.shape[0]
+    T = (nt * dt).to(u.min).value
+   
+    if submean:
+        dynspec = dynspec - np.mean(dynspec)
+
+    if taper:
+        taperlength_t = int(dynspec.shape[0]//10)
+        taperlength_f = int(dynspec.shape[1]//10)
+        window = np.ones_like(dynspec)
+        
+        window[:taperlength_t] *= np.hanning(2*taperlength_t)[:taperlength_t, np.newaxis]
+        window[-taperlength_t:] *= np.hanning(2*taperlength_t)[-taperlength_t:, np.newaxis]
+        window[:, :taperlength_f] *= np.hanning(2*taperlength_f)[np.newaxis, :taperlength_f]
+        window[:, -taperlength_f:] *= np.hanning(2*taperlength_f)[np.newaxis, -taperlength_f:]
+        dynspec = dynspec * window
+        
+    # 2D power spectrum is the Secondary spectrum
+    if sft:
+        from scintillation.dynspectools.slowft import slow_FT
+        print('Slow FT')
+        if npad >= 1:
+            pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
+            dynpad = np.pad(dynspec, pad_width, mode='constant')
+            CS = slow_FT(dynpad, freqs, fref)
+            S = np.abs(CS)**2.0
+            S = np.roll(S, 1, axis=0)
+        else:
+            CS = slow_FT(dynspec, freqs, np.max(freqs))
+            S = np.abs(CS)**2.0
+            S = np.roll(S, 1, axis=0)
+
+    else:
+        if npad > 1:
+            pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
+            dynpad = np.pad(dynspec, pad_width, mode='constant')
+            CS = np.fft.fft2(dynpad)
+        else:
+            CS = np.fft.fft2(dynspec)
+        S = np.fft.fftshift(CS)
+        S = np.abs(S)**2.0
+
+    # Bin in tau and FT - ONLY AFTER SQUARING
+    ft = np.fft.fftfreq(S.shape[0], dt)
+    ft = np.fft.fftshift(ft.to(u.mHz).value)
+
+
+    tau = np.fft.fftfreq(S.shape[1], df)
+    tau = np.fft.fftshift(tau.to(u.microsecond).value)    
+    taubin = tau.reshape(len(tau)//bintau, bintau).mean(-1)   
+    Sb = S.reshape(-1,S.shape[1]//bintau, bintau).mean(-1)
+
+    if binft > 1:
+        nftbin = Sb.shape[0]//binft
+        print(Sb.shape)
+        Sb = Sb[:binft*nftbin].reshape(nftbin, binft, -1).mean(1)
+        ftbin = ft[:binft*nftbin].reshape(nftbin, binft).mean(1)
+    else:
+        ftbin = ft
+
+    # Calculate the confugate frequencies (time delay, fringe rate), only used for plotting
+ 
+
+    return Sb, ftbin, taubin
+
+
+
 def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft=1, vm=3.,
                  bint=1, binf = 1, npad=1, submean=True, taper=True, plot=True, sft=False):
 
