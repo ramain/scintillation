@@ -296,8 +296,7 @@ def create_dynspec(foldspec, template=[1], profsig=5., bint=1, binf=1):
 
 
 def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, telname=None, note=None):
-    """
-    Write dynamic spectrum along with column info in 
+    """plot_    Write dynamic spectrum along with column info in 
     psrflux format, compatible with scintools
     
     dynspec: ndarray [time, frequency]
@@ -314,7 +313,7 @@ def write_psrflux(dynspec, dynspec_errs, F, t, fname, psrname=None, telname=None
     T_minute = T_minute + dt
     F_MHz = F.to(u.MHz).value
 
-    if fname.split('.')[-1] not in ['dspec', 'dynspec']:
+    if fname.split('.')[-1] not in ['ds', 'dspec', 'dynspec']:
         fname = fname + ".dynspec"
         
     with open(fname, 'w') as fn:
@@ -422,17 +421,19 @@ def create_secspec(dynspec, freqs, dt=4*u.s, bintau=2, binft=1, npad=1, submean=
     if sft:
         from scintillation.dynspectools.slowft import slow_FT
         print('Slow FT')
+        if not fref:
+            fref = np.max(freqs)
+                                
         if npad >= 1:
             pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
             CS = slow_FT(dynpad, freqs, fref)
             S = np.abs(CS)**2.0
-            S = np.roll(S, 1, axis=0)
         else:
-            CS = slow_FT(dynspec, freqs, np.max(freqs))
+            CS = slow_FT(dynspec, freqs, fref)
             S = np.abs(CS)**2.0
-            S = np.roll(S, 1, axis=0)
-
+        if dynpad.shape[0] % 2 == 1:
+                        S = np.roll(S, 1, axis=0)
     else:
         if npad > 1:
             pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
@@ -469,7 +470,7 @@ def create_secspec(dynspec, freqs, dt=4*u.s, bintau=2, binft=1, npad=1, submean=
 
 
 def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft=1, vm=3.,
-                 bint=1, binf = 1, npad=1, submean=True, taper=True, plot=True, sft=False):
+                 bint=1, binf = 1, npad=0, submean=True, taper=True, plot=True, sft=False,aspect=(8,8), title=' ', eta=0):
 
     """
     dynspec:  array with units [time, frequency]
@@ -526,16 +527,18 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
         if npad >= 1:
             pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
+            dynpad  = dynpad.copy(order='C')
             CS = slow_FT(dynpad, freqs, np.max(freqs))
             S = np.abs(CS)**2.0
             S = np.roll(S, 1, axis=0)
         else:
-            CS = slow_FT(dynspec, freqs, np.max(freqs))
+            dynpad = dynspec.copy(order='C')
+            CS = slow_FT(dynpad, freqs, np.max(freqs))
             S = np.abs(CS)**2.0
             S = np.roll(S, 1, axis=0)
 
     else:
-        if npad > 1:
+        if npad > 0:
             pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
             CS = np.fft.fft2(dynpad)
@@ -544,28 +547,37 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
         S = np.fft.fftshift(CS)
         S = np.abs(S)**2.0
 
-    
-    # Bin in tau and FT - ONLY AFTER SQUARING
-    Sb = S.reshape(-1,S.shape[1]//bintau, bintau).mean(-1)
-    if binft > 1:
-        nftbin = Sb.shape[0]//binft
-        print(Sb.shape)
-        Sb = Sb[:binft*nftbin].reshape(nftbin, binft, -1).mean(1)
-    Sb = np.log10(Sb)
-    
     # Calculate the confugate frequencies (time delay, fringe rate), only used for plotting
     ft = np.fft.fftfreq(S.shape[0], dt)
     ft = np.fft.fftshift(ft.to(u.mHz).value)
 
     tau = np.fft.fftfreq(S.shape[1], df)
-    tau = np.fft.fftshift(tau.to(u.microsecond).value)    
+    tau = np.fft.fftshift(tau.to(u.microsecond).value)
     
+    # Bin in tau and FT - ONLY AFTER SQUARING
+    if bintau > 1:
+        ntaubin = S.shape[1]//bintau
+        Sb = S[:,:bintau*ntaubin].reshape(-1,ntaubin, bintau).mean(-1)
+        if ntaubin*bintau != S.shape[1]:
+            print("bintau {0} does not evenly divide into {1} tau bins".format(bintau, S.shape[1]))
+        taubin = tau[:bintau*ntaubin].reshape(-1, bintau).mean(-1)
+    else:
+        Sb = np.copy(S)
+        taubin = np.copy(tau)
+    if binft > 1:
+        nftbin = Sb.shape[0]//binft
+        print(Sb.shape)
+        Sb = Sb[:binft*nftbin].reshape(nftbin, binft, -1).mean(1)
+    else:
+        ftbin = np.copy(ft)        
+    Sb = np.log10(Sb)
+        
     slow = np.median(Sb)-0.2
     shigh = slow + vm
 
     # Not the nicest, have a set of different plots it can produce
     if plot:
-        plt.figure(figsize=(10,10))
+        plt.figure(figsize=aspect)
         ax2 = plt.subplot2grid((2, 2), (0, 1), rowspan=2)
         ax3 = plt.subplot2grid((2, 2), (0, 0), rowspan=2)
 
@@ -573,24 +585,30 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
 
         # Plot dynamic spectrum image
 
-        ax2.imshow(dspec_plot.T, aspect='auto', vmax=7, vmin=-3, origin='lower',
+        ax3.set_title(title, fontsize=16)
+        ax3.imshow(dspec_plot.T, aspect='auto', vmax=7, vmin=-3, origin='lower',
                     extent=[0,T,min(freqs), max(freqs)], cmap='viridis')
-        ax2.set_xlabel('time (min)', fontsize=16)
-        ax2.set_ylabel('freq (MHz)', fontsize=16)
+        ax3.set_xlabel('time (min)', fontsize=16)
+        ax3.set_ylabel('freq (MHz)', fontsize=16)
         ax2.yaxis.tick_right()
         ax2.yaxis.set_label_position("right")
 
         # Plot Secondary spectrum
-        ax3.imshow(Sb.T, aspect='auto', vmin=slow, vmax=shigh, origin='lower',
+        ax2.imshow(Sb.T, aspect='auto', vmin=slow, vmax=shigh, origin='lower',
                    extent=[min(ft), max(ft), min(tau), max(tau)], interpolation='nearest',
                   cmap='viridis')
-        ax3.set_xlabel(r'$f_{D}$ (mHz)', fontsize=16)
-        ax3.set_ylabel(r'$\tau$ ($\mu$s)', fontsize=16) 
+        ax2.set_xlabel(r'$f_{D}$ (mHz)', fontsize=16)
+        ax2.set_ylabel(r'$\tau$ ($\mu$s)', fontsize=16) 
 
+        if eta:
+            ftmax = np.sqrt(max(tau)/eta)
+            ftplot = np.linspace(-ftmax, ftmax, 200)
+            ax2.plot(ftplot, eta*ftplot**2, color='tab:orange', alpha=0.7, linestyle='--')
+        
         if xlim:
-            ax3.set_xlim(-xlim, xlim)
+            ax2.set_xlim(-xlim, xlim)
         if ylim:
-            ax3.set_ylim(-ylim, ylim)
+            ax2.set_ylim(-ylim, ylim)
     return CS, ft, tau
 
 def Gaussfit(dynspec, df, dt):
