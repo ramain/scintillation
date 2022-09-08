@@ -1,11 +1,14 @@
 import numpy as np
 import os
 
-def slow_FT(dynspec, freqs, fref=None):
+def slow_FT(dynspec, freqs, src=None, fref=None):
     """
     Slow FT of dynamic spectrum along points of
     t*(f / fref), account for phase scaling of f_D.
+    'NuT transform' as described in Sprenger et al. 2021
     Given a uniform t axis, this reduces to a regular FT
+    It can also FFT around an uneven time axis, to remove variable
+    motion from eg. an orbit
 
     Uses Olaf's c-implemation if possible, otherwise reverts
     to a slow, pure Python / numpy method
@@ -17,8 +20,11 @@ def slow_FT(dynspec, freqs, fref=None):
 
     dynspec: [time, frequency] ndarray
         Dynamic spectrum to be Fourier Transformed
-    f: array of floats
+    freqs: array of floats
         Frequencies of the channels in dynspec
+    src: array of floats
+        Variable position of source, does not need to be uniformily spaced
+    fref: reference frequency for NuT
     """
 
     from numpy.ctypeslib import ndpointer
@@ -58,7 +64,7 @@ def slow_FT(dynspec, freqs, fref=None):
     src = src - np.mean(src)
     
     # declare the empty result array:
-    SS = np.empty((ntime, nfreq), dtype=np.complex128)
+    S = np.empty((ntime, nfreq), dtype=np.complex128)
 
     # Reference freq. to middle of band, should change this
     midf = len(freqs)//2
@@ -71,10 +77,10 @@ def slow_FT(dynspec, freqs, fref=None):
     if os.path.isfile(filename):
         print("Computing slow FT using C-implementation, fit_1d-response")
         lib.comp_dft_for_secspec(ntime, nfreq, ntime, min(r0), delta_r, fscale,
-                                 src, dynspec, SS)
+                                 src, dynspec, S)
 
         # flip along time
-        SS = SS[::-1]
+        S = S[::-1]
     else:
         print("C-implentation fit_1d-response not installed, "
               "computing slowFT with numpy")
@@ -84,13 +90,15 @@ def slow_FT(dynspec, freqs, fref=None):
         tscale = src[:, np.newaxis]*fscale[np.newaxis, :]
         FTphase = -2j*np.pi*tscale[:, np.newaxis, :] * \
             ft[np.newaxis, :, np.newaxis]
-        SS = np.sum(dynspec[:, np.newaxis, :]*np.exp(FTphase), axis=0)
-        SS = np.fft.fftshift(SS, axes=0)
+        S = np.sum(dynspec[:, np.newaxis, :]*np.exp(FTphase), axis=0)
+        S = np.fft.fftshift(S, axes=0)
 
     # Still need to FFT y axis, should change to pyfftw for memory and
     #   speed improvement
-    SS = np.fft.fft(SS, axis=1)
-    SS = np.fft.fftshift(SS, axes=1)
-
-    return SS
+    S = np.fft.fft(S, axis=1)
+    S = np.fft.fftshift(S, axes=1)
+    if S.shape[0] % 2 == 1:
+        S = np.roll(S, -1, axis=0)
+    
+    return S
 

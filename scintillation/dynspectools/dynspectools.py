@@ -351,7 +351,7 @@ def read_psrflux(fname):
 
     with open(fname, "r") as file:
         for line in file:
-            if line.startswith("#"):
+            if line.startswith("#") and len(line) > 2:
                 headline = str.strip(line[1:])
                 if str.split(headline)[0] == 'MJD0:':
                     # MJD of start of obs
@@ -427,10 +427,10 @@ def create_secspec(dynspec, freqs, dt=4*u.s, bintau=2, binft=1, npad=1, submean=
         if npad >= 1:
             pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
-            CS = slow_FT(dynpad, freqs, fref)
+            CS = slow_FT(dynpad, freqs, fref=fref)
             S = np.abs(CS)**2.0
         else:
-            CS = slow_FT(dynspec, freqs, fref)
+            CS = slow_FT(dynspec, freqs, fref=fref)
             S = np.abs(CS)**2.0
         if dynpad.shape[0] % 2 == 1:
                         S = np.roll(S, 1, axis=0)
@@ -528,12 +528,12 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
             pad_width= ((npad*dynspec.shape[0], npad*dynspec.shape[0]), (0, 0))
             dynpad = np.pad(dynspec, pad_width, mode='constant')
             dynpad  = dynpad.copy(order='C')
-            CS = slow_FT(dynpad, freqs, np.max(freqs))
+            CS = slow_FT(dynpad, freqs, fref=np.max(freqs))
             S = np.abs(CS)**2.0
             S = np.roll(S, 1, axis=0)
         else:
             dynpad = dynspec.copy(order='C')
-            CS = slow_FT(dynpad, freqs, np.max(freqs))
+            CS = slow_FT(dynpad, freqs, fref=np.max(freqs))
             S = np.abs(CS)**2.0
             S = np.roll(S, 1, axis=0)
 
