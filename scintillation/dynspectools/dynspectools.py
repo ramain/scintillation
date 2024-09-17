@@ -18,7 +18,7 @@ def readpsrarch(fname, dedisperse=True, verbose=True):
     dedisperse: Bool
     apply psrchive's by-channel incoherent de-dispersion
 
-    Returns archive data cube, frequency array, time(mjd) array, source name
+    Returns archive data cube, frequency array, time(mjd) array, source name, tel name
     """
     import psrchive
     
@@ -469,8 +469,8 @@ def create_secspec(dynspec, freqs, dt=4*u.s, bintau=2, binft=1, npad=1, submean=
 
 
 
-def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft=1, vm=3.,
-                 bint=1, binf = 1, npad=0, submean=True, taper=True, plot=True, sft=False,aspect=(8,8), title=' ', eta=0):
+def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, flims=[0], bintau=2, binft=1, vm=3.,
+                 bint=1, binf = 1, npad=0, submean=True, taper=True, plot=True, sft=False, cmap='viridis', aspect=(8,8), title=' ', eta=0):
 
     """
     dynspec:  array with units [time, frequency]
@@ -587,16 +587,19 @@ def plot_secspec(dynspec, freqs, dt=4*u.s, xlim=None, ylim=None, bintau=2, binft
 
         ax3.set_title(title, fontsize=16)
         ax3.imshow(dspec_plot.T, aspect='auto', vmax=7, vmin=-3, origin='lower',
-                    extent=[0,T,min(freqs), max(freqs)], cmap='viridis')
+                    extent=[0,T,min(freqs), max(freqs)], cmap=cmap)
         ax3.set_xlabel('time (min)', fontsize=16)
         ax3.set_ylabel('freq (MHz)', fontsize=16)
+        if len(flims) > 1:
+            ax3.set_ylim(flims[0], flims[1])
+        
         ax2.yaxis.tick_right()
         ax2.yaxis.set_label_position("right")
 
         # Plot Secondary spectrum
         ax2.imshow(Sb.T, aspect='auto', vmin=slow, vmax=shigh, origin='lower',
                    extent=[min(ft), max(ft), min(tau), max(tau)], interpolation='nearest',
-                  cmap='viridis')
+                   cmap=cmap)
         ax2.set_xlabel(r'$f_{D}$ (mHz)', fontsize=16)
         ax2.set_ylabel(r'$\tau$ ($\mu$s)', fontsize=16) 
 
